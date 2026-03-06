@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 import random
-import time
 import os
+import re
+import streamlit.components.v1 as components
 
-# --- 1. ตั้งค่าหน้าเว็บให้ Compact สำหรับ iPhone ---
+# --- 1. ตั้งค่าหน้าเว็บ ---
 st.set_page_config(page_title="TOEIC Master", layout="centered")
 
 st.markdown("""
@@ -17,46 +18,106 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ฟังก์ชันโหลดข้อมูล ---
+# --- 2. ฟังก์ชันโหลดข้อมูลคำศัพท์และฐานข้อมูลผู้ใช้ ---
 @st.cache_data
-def load_data():
+def load_vocab():
     file_path = "TOEIC_Vocab_3000.xlsx"
     if os.path.exists(file_path):
         return pd.read_excel(file_path).to_dict('records')
     return None
 
-vocab_list = load_data()
+vocab_list = load_vocab()
 
 if not vocab_list:
-    st.error("❌ ไม่พบไฟล์ Excel กรุณาเช็คชื่อไฟล์บน GitHub ครับ")
+    st.error("❌ ไม่พบไฟล์ Excel คำศัพท์ บน GitHub ครับ")
     st.stop()
 
+# ระบบจัดการฐานข้อมูลผู้เล่น
+USER_DB = "users_data.csv"
+
+def load_users():
+    if os.path.exists(USER_DB):
+        return pd.read_csv(USER_DB)
+    return pd.DataFrame(columns=["Username", "TOEIC_History", "Status"])
+
+def save_new_user(username, toeic_score):
+    df = load_users()
+    # ค่าเริ่มต้นคือ Free
+    new_user = pd.DataFrame([{"Username": username, "TOEIC_History": toeic_score, "Status": "Free"}])
+    df = pd.concat([df, new_user], ignore_index=True)
+    df.to_csv(USER_DB, index=False, encoding='utf-8-sig')
+
 # --- 3. ระบบ Session State ---
-if 'user' not in st.session_state:
+if 'logged_in' not in st.session_state:
     st.session_state.update({
-        'user': None, 'score': 0, 'count': 0, 
-        'ans_submitted': False, 'options': []
+        'logged_in': False, 'user': None, 'status': 'Free', 
+        'score': 0, 'count': 0, 'ans_submitted': False, 'options': []
     })
 
-# --- 4. หน้า Login ---
-if st.session_state.user is None:
+# --- 4. หน้า Login & Registration ---
+if not st.session_state.logged_in:
     st.markdown("<h1 style='text-align: center;'>🚀 TOEIC Master</h1>", unsafe_allow_html=True)
     st.write("---")
-    user_input = st.text_input("👤 ชื่อผู้เล่น:", placeholder="ระบุชื่อของคุณ")
-    num_q = st.select_slider("🔢 จำนวนข้อ:", options=[5, 10, 15, 20, 30], value=10)
     
-    use_timer = st.checkbox("⏰ เปิดระบบจับเวลา")
-    time_limit = st.selectbox("กี่วินาทีต่อข้อ:", [10, 15, 20, 30], index=1) if use_timer else 0
+    st.info("💡 **รูปแบบการเข้าระบบ:** ชื่อเล่น + ตัวเลข 4 หลัก (เช่น Micro1234)")
+    username_input = st.text_input("👤 กรอกชื่อผู้เล่น:")
     
-    if st.button("เริ่มเกม 🎮"):
-        if user_input:
-            st.session_state.update({
-                'user': user_input, 'total_q': num_q, 'time_limit': time_limit,
-                'questions': random.sample(vocab_list, num_q), 'count': 0, 'score': 0
-            })
-            st.rerun()
+    if username_input:
+        if re.match(r'^[^\d]+\d{4}$', username_input.strip()):
+            username_clean = username_input.strip()
+            df = load_users()
+            
+            # ---------------- กรณีที่ 1: เคยลงทะเบียนแล้ว (Login) ----------------
+            if username_clean in df['Username'].values:
+                user_data = df[df['Username'] == username_clean].iloc[0]
+                status = user_data.get('Status', 'Free')
+                
+                st.success(f"✅ ยินดีต้อนรับกลับมาครับคุณ {username_clean}")
+                
+                # แสดงข้อความตามสถานะ
+                if status == 'Free':
+                    st.info("📢 **สถานะบัญชี:** ใช้งานฟรี (สุ่มจาก 1,000 คำ)")
+                    with st.expander("💎 ต้องการใช้งานเต็มรูปแบบ (3,000 คำ)?"):
+                        st.warning("ระบบนี้เป็นเวอร์ชันฟรี 1,000 คำ\n\nหากต้องการใช้งานชุดข้อสอบเต็ม 3,000 คำ **ค่าสมัคร 99 บาท**")
+                        st.success("📲 กรุณากดชำระเงิน โอนสลิป และแจ้ง Admin เพื่อทำการตรวจสอบและอนุมัติครับ")
+                else:
+                    st.success("💎 **สถานะบัญชี:** VIP (สุ่มจาก 3,000 คำเต็ม)")
+                
+                st.write("---")
+                num_q = st.select_slider("🔢 จำนวนข้อ:", options=[5, 10, 15, 20, 30], value=10)
+                use_timer = st.checkbox("⏰ เปิดระบบจับเวลา")
+                time_limit = st.selectbox("วินาทีต่อข้อ:", [10, 15, 20, 30], index=1) if use_timer else 0
+                
+                if st.button("เริ่มเกม 🎮"):
+                    # ตัดชุดคำศัพท์ตามสถานะ VIP หรือ Free
+                    if status == 'Free':
+                        available_vocab = vocab_list[:1000] # ดึงแค่ 1000 คำแรก
+                    else:
+                        available_vocab = vocab_list # ดึงครบ 3000 คำ
+                        
+                    st.session_state.update({
+                        'logged_in': True, 'user': username_clean, 'status': status,
+                        'total_q': num_q, 'time_limit': time_limit,
+                        'questions': random.sample(available_vocab, num_q)
+                    })
+                    st.rerun()
+
+            # ---------------- กรณีที่ 2: ยังไม่เคยลงทะเบียน (Register) ----------------
+            else:
+                st.warning("📝 ไม่พบประวัติ กรุณาลงทะเบียนครั้งแรกก่อนเข้าใช้งาน")
+                has_score = st.radio("คุณเคยสอบ TOEIC หรือไม่?", ["ไม่เคยสอบ", "เคยสอบแล้ว"], horizontal=True)
+                toeic_history = "ไม่เคยสอบ"
+                
+                if has_score == "เคยสอบแล้ว":
+                    toeic_history = st.number_input("โปรดระบุคะแนน TOEIC ล่าสุด:", min_value=10, max_value=990, step=5)
+                
+                if st.button("บันทึกข้อมูลและลงทะเบียน ✅"):
+                    save_new_user(username_clean, toeic_history)
+                    st.success("🎉 ลงทะเบียนสำเร็จ! กรุณากดปุ่ม 'เข้าสู่ระบบ' ด้านล่าง")
+                    if st.button("เข้าสู่ระบบ ➡"):
+                        st.rerun()
         else:
-            st.warning("กรุณาใส่ชื่อก่อนครับคุณธวัช")
+            st.error("⚠️ รูปแบบชื่อไม่ถูกต้อง! ต้องเป็น ชื่อเล่น + ตัวเลข 4 หลัก (เช่น Micro1234)")
 
 # --- 5. หน้า Game ---
 else:
@@ -67,11 +128,26 @@ else:
         col1.write(f"📝 **ข้อ {st.session_state.count + 1}/{st.session_state.total_q}**")
         col2.markdown(f"<div style='text-align: right;'>🏆 คะแนน: <b>{st.session_state.score}</b></div>", unsafe_allow_html=True)
 
-        # --- ส่วนจับเวลาแบบใหม่ (ไม่รบกวนปุ่มกด) ---
         if st.session_state.time_limit > 0 and not st.session_state.ans_submitted:
-            st.write(f"⏳ เวลาจำกัด: **{st.session_state.time_limit} วินาที**")
-            # เราจะแสดงแถบเวลาที่นิ่งไว้ เพื่อให้ระบบไม่ Re-run ตัวเองจนปุ่มรวน
-            st.progress(1.0) 
+            timer_html = f"""
+                <style>
+                #progress-container {{ width: 100%; background-color: #e0e0e0; border-radius: 10px; margin-bottom: 10px; height: 20px; overflow: hidden; border: 1px solid #ddd; }}
+                #progress-bar {{ width: 100%; height: 100%; background-color: #4CAF50; transition: width 1s linear, background-color 0.5s; }}
+                </style>
+                <div id="progress-container"><div id="progress-bar"></div></div>
+                <div style="text-align:center; font-family:sans-serif; font-weight:bold; font-size:1.2rem; color:#333;">⏳ <span id="time-text">{st.session_state.time_limit}</span> วินาที</div>
+                <script>
+                var total = {st.session_state.time_limit}; var current = total;
+                var bar = document.getElementById("progress-bar"); var text = document.getElementById("time-text");
+                var interval = setInterval(function() {{
+                    current--; text.innerHTML = current;
+                    var percent = (current / total) * 100; bar.style.width = percent + "%";
+                    if (percent <= 30) bar.style.backgroundColor = "#FF5252"; else if (percent <= 60) bar.style.backgroundColor = "#FFC107"; else bar.style.backgroundColor = "#4CAF50";
+                    if (current <= 0) {{ clearInterval(interval); var btn = window.parent.document.querySelector('.stButton button'); if(btn) btn.click(); }}
+                }}, 1000);
+                </script>
+            """
+            components.html(timer_html, height=85)
 
         st.write("---")
         st.markdown(f"<h1 class='vocab-header'>{q['คำศัพท์']} <span class='vocab-type'>({q['ประเภท']})</span></h1>", unsafe_allow_html=True)
@@ -84,8 +160,6 @@ else:
             st.session_state.options = opts
 
         answer = st.radio("เลือกคำแปล:", st.session_state.options, label_visibility="collapsed", disabled=st.session_state.ans_submitted)
-
-        st.write("") 
 
         if not st.session_state.ans_submitted:
             if st.button("ตกลง ✅"):
@@ -100,21 +174,20 @@ else:
             if st.session_state.last_result == "correct":
                 st.success("### ✅ ถูกต้องครับ!")
             else:
-                st.error(f"### ❌ ผิด! คำตอบคือ: **{correct}**")
+                st.error(f"### ❌ ผิด! หรือหมดเวลา! คำตอบคือ: **{correct}**")
             
-            with st.expander("📖 ดูตัวอย่างประโยค", expanded=True):
-                st.markdown(f"**ตัวอย่าง:** *{q['ตัวอย่าง']}*")
-                st.markdown(f"**แปล:** {q['แปลประโยค']}")
+            with st.expander("📖 ดูคำอธิบาย", expanded=True):
+                st.write(f"*{q['ตัวอย่าง']}*")
+                st.caption(f"แปล: {q['แปลประโยค']}")
             
             if st.button("ข้อต่อไป ➡"):
                 st.session_state.update({'count': st.session_state.count + 1, 'ans_submitted': False, 'options': []})
                 st.rerun()
     
-    # --- 6. หน้าสรุปผล ---
     else:
         st.balloons()
         st.markdown("<h1 style='text-align: center;'>🎊 จบเกม!</h1>", unsafe_allow_html=True)
         st.markdown(f"<h1 style='text-align: center; color: #E74C3C;'>{st.session_state.score} / {st.session_state.total_q}</h1>", unsafe_allow_html=True)
-        if st.button("🔄 เล่นใหม่อีกครั้ง"):
+        if st.button("🔄 ออกจากระบบ"):
             st.session_state.clear()
             st.rerun()
