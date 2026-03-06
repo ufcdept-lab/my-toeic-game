@@ -16,10 +16,10 @@ st.markdown("""
     div.stButton > button { width: 100%; border-radius: 12px; height: 3.5rem; font-weight: bold; }
     .vocab-header { text-align: center; color: #2E86C1; margin-top: 0; margin-bottom: 5px; }
     .vocab-type { color: #85929E; font-size: 1.2rem; font-weight: normal; }
+    .stat-box { background-color: #F1F9FF; padding: 15px; border-radius: 10px; border: 1px solid #D4E6F1; margin-bottom: 15px;}
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ฟังก์ชันโหลดคำศัพท์ และ ฐานข้อมูล Google Sheets ---
 @st.cache_data
 def load_vocab():
     file_path = "TOEIC_Vocab_3000.xlsx"
@@ -28,12 +28,11 @@ def load_vocab():
     return None
 
 vocab_list = load_vocab()
-
 if not vocab_list:
     st.error("❌ ไม่พบไฟล์ Excel คำศัพท์ บน GitHub ครับ")
     st.stop()
 
-# ลิงก์ Web App จาก Google Sheets
+# ลิงก์ Web App ของคุณธวัช (ลิงก์เดิม)
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbytSH5n98Adeqp_v8wfKqH7vILIMPcd4-8nsDlN_0hikm9XmVtz9t6CJ0MDbuwTY3UuMw/exec"
 
 def load_users():
@@ -42,35 +41,33 @@ def load_users():
         data = response.json()
         if len(data) > 0:
             return pd.DataFrame(data)
-        else:
-            return pd.DataFrame(columns=["Username", "TOEIC_History", "Status"])
-    except:
-        return pd.DataFrame(columns=["Username", "TOEIC_History", "Status"])
-
-def save_new_user(username, toeic_score):
-    payload = {
-        "Username": username,
-        "TOEIC_History": toeic_score,
-        "Status": "Free"
-    }
-    try:
-        requests.post(WEB_APP_URL, json=payload)
     except:
         pass
+    return pd.DataFrame(columns=["Username", "TOEIC_History", "Status", "Total_Score", "Words_Played"])
 
-# --- 3. ระบบ Session State ---
+def save_new_user(username, toeic_score):
+    payload = {"Action": "Register", "Username": username, "TOEIC_History": toeic_score, "Status": "Free"}
+    try: requests.post(WEB_APP_URL, json=payload)
+    except: pass
+
+def save_game_score(username, score, total_q):
+    payload = {"Action": "SaveScore", "Username": username, "Score": score, "Total_Q": total_q}
+    try: requests.post(WEB_APP_URL, json=payload)
+    except: pass
+
+# --- ระบบ Session State ---
 if 'logged_in' not in st.session_state:
     st.session_state.update({
         'logged_in': False, 'user': None, 'status': 'Free', 
-        'score': 0, 'count': 0, 'ans_submitted': False, 'options': []
+        'score': 0, 'count': 0, 'ans_submitted': False, 'options': [], 'score_saved': False
     })
 
-# --- 4. หน้า Login & Registration ---
+# --- หน้า Login & Registration ---
 if not st.session_state.logged_in:
     st.markdown("<h1 style='text-align: center;'>🚀 TOEIC Master</h1>", unsafe_allow_html=True)
     st.write("---")
     
-    st.info("💡 **รูปแบบการเข้าระบบ:** ชื่อเล่น + ตัวเลข 4 หลัก (เช่น Somchai1234)")
+    st.info("💡 **เข้าสู่ระบบ:** ใส่ชื่อเล่น + เลข 4 หลัก (เช่น Somchai1234)")
     username_input = st.text_input("👤 กรอกชื่อผู้เล่น:")
     
     if username_input:
@@ -78,49 +75,52 @@ if not st.session_state.logged_in:
             username_clean = username_input.strip()
             df = load_users()
             
-            # --- กรณีที่ 1: เคยลงทะเบียนแล้ว (Login) ---
+            # --- 1: เคยลงทะเบียนแล้ว (ดึงคะแนนสะสมมาโชว์) ---
             if not df.empty and username_clean in df['Username'].values:
                 user_data = df[df['Username'] == username_clean].iloc[0]
                 status = user_data.get('Status', 'Free')
+                total_score = user_data.get('Total_Score', 0)
+                words_played = user_data.get('Words_Played', 0)
                 
                 st.success(f"✅ ยินดีต้อนรับกลับมาครับคุณ {username_clean}")
                 
+                # โชว์กล่องคะแนนสะสม
+                st.markdown(f"""
+                <div class="stat-box">
+                    <h3 style="margin:0; color:#2C3E50; text-align:center;">📈 สถิติการเรียนของคุณ</h3>
+                    <p style="margin:0; text-align:center; font-size:1.1rem;">เรียนไปแล้ว <b>{words_played}</b> ข้อ</p>
+                    <p style="margin:0; text-align:center; font-size:1.1rem; color:#27AE60;">ตอบถูกสะสม <b>{total_score}</b> แต้ม 🎯</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
                 if status == 'Free':
-                    st.info("📢 **สถานะบัญชี:** ใช้งานฟรี (สุ่มจาก 1,000 คำ)")
-                    with st.expander("💎 ต้องการใช้งานเต็มรูปแบบ (3,000 คำ)?"):
-                        st.warning("ระบบนี้เป็นเวอร์ชันฟรี 1,000 คำ\n\nหากต้องการใช้งานชุดข้อสอบเต็ม 3,000 คำ **ค่าสมัคร 99 บาท**")
-                        # แสดง QR Code พร้อมเพย์อัตโนมัติ
+                    with st.expander("💎 ต้องการใช้งานเต็มรูปแบบ (ปลดล็อก 3,000 คำ)?"):
+                        st.warning("บัญชีนี้เป็นเวอร์ชันฟรี\n\nหากต้องการใช้งานชุดข้อสอบเต็ม 3,000 คำ **ค่าสมัคร 99 บาท**")
                         st.image("https://promptpay.io/0800894787.png", caption="สแกนเพื่อชำระเงิน (พร้อมเพย์: 0800894787)", width=200)
-                        
-                        # --- เพิ่มช่องทางติดต่อตรงนี้ครับ ---
-                        st.success("📲 **เมื่อโอนเงินเรียบร้อยแล้ว**\n\nกรุณาส่งหลักฐาน (สลิปโอนเงิน) มาที่อีเมล:\n\n📧 **cctv225373@gmail.com**\n\nเพื่อรอให้ Admin ตรวจสอบและอนุมัติระบบครับ")
+                        st.success("📲 **ส่งสลิปโอนเงินมาที่อีเมล:**\n\n📧 **cctv225373@gmail.com**\n\nเพื่อรอให้ Admin อนุมัติระบบครับ")
                 else:
                     st.success("💎 **สถานะบัญชี:** VIP (สุ่มจาก 3,000 คำเต็ม)")
                 
                 st.write("---")
-                num_q = st.select_slider("🔢 จำนวนข้อ:", options=[5, 10, 15, 20, 30], value=10)
+                num_q = st.select_slider("🔢 จำนวนข้อในรอบนี้:", options=[5, 10, 15, 20, 30], value=10)
                 use_timer = st.checkbox("⏰ เปิดระบบจับเวลา")
                 time_limit = st.selectbox("วินาทีต่อข้อ:", [10, 15, 20, 30], index=1) if use_timer else 0
                 
                 if st.button("เริ่มเกม 🎮"):
-                    if status == 'Free':
-                        available_vocab = vocab_list[:1000] 
-                    else:
-                        available_vocab = vocab_list 
-                        
+                    available_vocab = vocab_list[:1000] if status == 'Free' else vocab_list 
                     st.session_state.update({
                         'logged_in': True, 'user': username_clean, 'status': status,
                         'total_q': num_q, 'time_limit': time_limit,
-                        'questions': random.sample(available_vocab, num_q)
+                        'questions': random.sample(available_vocab, num_q),
+                        'score_saved': False
                     })
                     st.rerun()
 
-            # --- กรณีที่ 2: ยังไม่เคยลงทะเบียน (Register) ---
+            # --- 2: ยังไม่เคยลงทะเบียน ---
             else:
                 st.warning("📝 ไม่พบประวัติ กรุณาลงทะเบียนครั้งแรกก่อนเข้าใช้งาน")
                 has_score = st.radio("คุณเคยสอบ TOEIC หรือไม่?", ["ไม่เคยสอบ", "เคยสอบแล้ว"], horizontal=True)
                 toeic_history = "ไม่เคยสอบ"
-                
                 if has_score == "เคยสอบแล้ว":
                     toeic_history = st.number_input("โปรดระบุคะแนน TOEIC ล่าสุด:", min_value=10, max_value=990, step=5)
                 
@@ -132,7 +132,7 @@ if not st.session_state.logged_in:
         else:
             st.error("⚠️ รูปแบบชื่อไม่ถูกต้อง! ต้องเป็น ชื่อเล่น + ตัวเลข 4 หลัก (เช่น Somchai1234)")
 
-# --- 5. หน้า Game ---
+# --- หน้า Game ---
 else:
     if st.session_state.count < st.session_state.total_q:
         q = st.session_state.questions[st.session_state.count]
@@ -197,10 +197,19 @@ else:
                 st.session_state.update({'count': st.session_state.count + 1, 'ans_submitted': False, 'options': []})
                 st.rerun()
     
+    # --- หน้าสรุปผลตอนจบเกม ---
     else:
+        # ส่งคะแนนไปเซฟที่ Google Sheets ให้อัตโนมัติ 1 ครั้ง
+        if not st.session_state.score_saved:
+            save_game_score(st.session_state.user, st.session_state.score, st.session_state.total_q)
+            st.session_state.score_saved = True
+            
         st.balloons()
         st.markdown("<h1 style='text-align: center;'>🎊 จบเกม!</h1>", unsafe_allow_html=True)
-        st.markdown(f"<h1 style='text-align: center; color: #E74C3C;'>{st.session_state.score} / {st.session_state.total_q}</h1>", unsafe_allow_html=True)
-        if st.button("🔄 ออกจากระบบ / เล่นใหม่"):
+        st.markdown(f"<h1 style='text-align: center; color: #E74C3C;'>ได้คะแนน {st.session_state.score} / {st.session_state.total_q}</h1>", unsafe_allow_html=True)
+        
+        st.success("💾 **ระบบบันทึกคะแนนสะสมของคุณลงฐานข้อมูลเรียบร้อยแล้ว!**")
+        
+        if st.button("🔄 กลับหน้าหลัก / เริ่มรอบใหม่"):
             st.session_state.clear()
             st.rerun()
