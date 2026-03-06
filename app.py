@@ -3,6 +3,7 @@ import pandas as pd
 import random
 import os
 import re
+import requests
 import streamlit.components.v1 as components
 
 # --- 1. ตั้งค่าหน้าเว็บ ---
@@ -18,7 +19,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ฟังก์ชันโหลดข้อมูลคำศัพท์และฐานข้อมูลผู้ใช้ ---
+# --- 2. ฟังก์ชันโหลดคำศัพท์ และ ฐานข้อมูล Google Sheets ---
 @st.cache_data
 def load_vocab():
     file_path = "TOEIC_Vocab_3000.xlsx"
@@ -32,20 +33,30 @@ if not vocab_list:
     st.error("❌ ไม่พบไฟล์ Excel คำศัพท์ บน GitHub ครับ")
     st.stop()
 
-# ระบบจัดการฐานข้อมูลผู้เล่น
-USER_DB = "users_data.csv"
+# ลิงก์ Web App จาก Google Sheets
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbytSH5n98Adeqp_v8wfKqH7vILIMPcd4-8nsDlN_0hikm9XmVtz9t6CJ0MDbuwTY3UuMw/exec"
 
 def load_users():
-    if os.path.exists(USER_DB):
-        return pd.read_csv(USER_DB)
-    return pd.DataFrame(columns=["Username", "TOEIC_History", "Status"])
+    try:
+        response = requests.get(WEB_APP_URL)
+        data = response.json()
+        if len(data) > 0:
+            return pd.DataFrame(data)
+        else:
+            return pd.DataFrame(columns=["Username", "TOEIC_History", "Status"])
+    except:
+        return pd.DataFrame(columns=["Username", "TOEIC_History", "Status"])
 
 def save_new_user(username, toeic_score):
-    df = load_users()
-    # ค่าเริ่มต้นคือ Free
-    new_user = pd.DataFrame([{"Username": username, "TOEIC_History": toeic_score, "Status": "Free"}])
-    df = pd.concat([df, new_user], ignore_index=True)
-    df.to_csv(USER_DB, index=False, encoding='utf-8-sig')
+    payload = {
+        "Username": username,
+        "TOEIC_History": toeic_score,
+        "Status": "Free"
+    }
+    try:
+        requests.post(WEB_APP_URL, json=payload)
+    except:
+        pass
 
 # --- 3. ระบบ Session State ---
 if 'logged_in' not in st.session_state:
@@ -59,7 +70,7 @@ if not st.session_state.logged_in:
     st.markdown("<h1 style='text-align: center;'>🚀 TOEIC Master</h1>", unsafe_allow_html=True)
     st.write("---")
     
-    st.info("💡 **รูปแบบการเข้าระบบ:** ชื่อเล่น + ตัวเลข 4 หลัก (เช่น Micro1234)")
+    st.info("💡 **รูปแบบการเข้าระบบ:** ชื่อเล่น + ตัวเลข 4 หลัก (เช่น Somchai1234)")
     username_input = st.text_input("👤 กรอกชื่อผู้เล่น:")
     
     if username_input:
@@ -67,19 +78,20 @@ if not st.session_state.logged_in:
             username_clean = username_input.strip()
             df = load_users()
             
-            # ---------------- กรณีที่ 1: เคยลงทะเบียนแล้ว (Login) ----------------
-            if username_clean in df['Username'].values:
+            # --- กรณีที่ 1: เคยลงทะเบียนแล้ว (Login) ---
+            if not df.empty and username_clean in df['Username'].values:
                 user_data = df[df['Username'] == username_clean].iloc[0]
                 status = user_data.get('Status', 'Free')
                 
                 st.success(f"✅ ยินดีต้อนรับกลับมาครับคุณ {username_clean}")
                 
-                # แสดงข้อความตามสถานะ
                 if status == 'Free':
                     st.info("📢 **สถานะบัญชี:** ใช้งานฟรี (สุ่มจาก 1,000 คำ)")
                     with st.expander("💎 ต้องการใช้งานเต็มรูปแบบ (3,000 คำ)?"):
                         st.warning("ระบบนี้เป็นเวอร์ชันฟรี 1,000 คำ\n\nหากต้องการใช้งานชุดข้อสอบเต็ม 3,000 คำ **ค่าสมัคร 99 บาท**")
-                        st.success("📲 กรุณากดชำระเงิน โอนสลิป และแจ้ง Admin เพื่อทำการตรวจสอบและอนุมัติครับ")
+                        # แสดง QR Code พร้อมเพย์อัตโนมัติ
+                        st.image("https://promptpay.io/0800894787.png", caption="สแกนเพื่อชำระเงิน (พร้อมเพย์: 0800894787)", width=200)
+                        st.success("📲 เมื่อโอนเงินแล้ว กรุณาแจ้ง Admin (สลิป) เพื่อทำการตรวจสอบและอนุมัติครับ")
                 else:
                     st.success("💎 **สถานะบัญชี:** VIP (สุ่มจาก 3,000 คำเต็ม)")
                 
@@ -89,11 +101,10 @@ if not st.session_state.logged_in:
                 time_limit = st.selectbox("วินาทีต่อข้อ:", [10, 15, 20, 30], index=1) if use_timer else 0
                 
                 if st.button("เริ่มเกม 🎮"):
-                    # ตัดชุดคำศัพท์ตามสถานะ VIP หรือ Free
                     if status == 'Free':
-                        available_vocab = vocab_list[:1000] # ดึงแค่ 1000 คำแรก
+                        available_vocab = vocab_list[:1000] 
                     else:
-                        available_vocab = vocab_list # ดึงครบ 3000 คำ
+                        available_vocab = vocab_list 
                         
                     st.session_state.update({
                         'logged_in': True, 'user': username_clean, 'status': status,
@@ -102,7 +113,7 @@ if not st.session_state.logged_in:
                     })
                     st.rerun()
 
-            # ---------------- กรณีที่ 2: ยังไม่เคยลงทะเบียน (Register) ----------------
+            # --- กรณีที่ 2: ยังไม่เคยลงทะเบียน (Register) ---
             else:
                 st.warning("📝 ไม่พบประวัติ กรุณาลงทะเบียนครั้งแรกก่อนเข้าใช้งาน")
                 has_score = st.radio("คุณเคยสอบ TOEIC หรือไม่?", ["ไม่เคยสอบ", "เคยสอบแล้ว"], horizontal=True)
@@ -113,11 +124,11 @@ if not st.session_state.logged_in:
                 
                 if st.button("บันทึกข้อมูลและลงทะเบียน ✅"):
                     save_new_user(username_clean, toeic_history)
-                    st.success("🎉 ลงทะเบียนสำเร็จ! กรุณากดปุ่ม 'เข้าสู่ระบบ' ด้านล่าง")
+                    st.success("🎉 ลงทะเบียนสำเร็จ! ข้อมูลถูกบันทึกไปยังฐานข้อมูลแล้ว กรุณากดปุ่ม 'เข้าสู่ระบบ' ด้านล่าง")
                     if st.button("เข้าสู่ระบบ ➡"):
                         st.rerun()
         else:
-            st.error("⚠️ รูปแบบชื่อไม่ถูกต้อง! ต้องเป็น ชื่อเล่น + ตัวเลข 4 หลัก (เช่น Micro1234)")
+            st.error("⚠️ รูปแบบชื่อไม่ถูกต้อง! ต้องเป็น ชื่อเล่น + ตัวเลข 4 หลัก (เช่น Somchai1234)")
 
 # --- 5. หน้า Game ---
 else:
@@ -188,6 +199,6 @@ else:
         st.balloons()
         st.markdown("<h1 style='text-align: center;'>🎊 จบเกม!</h1>", unsafe_allow_html=True)
         st.markdown(f"<h1 style='text-align: center; color: #E74C3C;'>{st.session_state.score} / {st.session_state.total_q}</h1>", unsafe_allow_html=True)
-        if st.button("🔄 ออกจากระบบ"):
+        if st.button("🔄 ออกจากระบบ / เล่นใหม่"):
             st.session_state.clear()
             st.rerun()
